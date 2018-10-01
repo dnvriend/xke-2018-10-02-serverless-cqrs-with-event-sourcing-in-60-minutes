@@ -26,6 +26,11 @@ package object dnvriend {
   case class PersonRenamed(id: String, name: String, timestamp: Long) extends Event
   case class NoOperation(id: String, name: String, timestamp: Long) extends Event
 
+  object Person {
+    implicit val format: Format[Person] = Json.format
+  }
+  case class Person(id: String, name: String, lastUpdated: Long)
+
   def randomNames(): List[String] = {
     scala.io.Source.fromInputStream(getClass.getClassLoader.getResourceAsStream("names.txt")).getLines().toList
   }

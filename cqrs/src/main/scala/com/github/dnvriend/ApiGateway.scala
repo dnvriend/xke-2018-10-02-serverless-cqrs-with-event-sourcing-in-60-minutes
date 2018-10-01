@@ -8,8 +8,12 @@ import com.github.dnvriend.lambda.annotation.{HttpHandler, KinesisConf, Schedule
 import play.api.libs.json.{JsValue, Json}
 import scalaz.Scalaz._
 import com.github.dnvriend.lambda.JsonReads.nothingReads
+import com.github.dnvriend.repo.JsonRepository
+import com.github.dnvriend.repo.dynamodb.DynamoDBJsonRepository
+import scalaz.Validation
 
 import scala.compat.Platform
+import scala.util.Try
 
 @HttpHandler(path = "/person", method = "put")
 class CreatePersonHandler extends JsonApiGatewayHandler[CreatePerson] {
@@ -76,6 +80,18 @@ class ReadPerson extends JsonApiGatewayHandler[Nothing] {
   }
 }
 
+@HttpHandler(path = "/person", method = "get")
+class ListPersons extends JsonDynamoRepoApiGatewayHandler[Person]("people_table") {
+  override def handle(data: Option[Person],
+                      pathParams: Map[String, String],
+                      requestParams: Map[String, String],
+                      request: HttpRequest,
+                      ctx: SamContext, repo: JsonRepository): HttpResponse = {
+    val people: List[Person] = repo.list[Person](100).map(_._2)
+    HttpResponse.ok.withBody(Json.toJson(people))
+  }
+}
+
 @ScheduleConf(schedule = "rate(1 minute)")
 @AmazonKinesisFullAccess
 @AmazonDynamoDBFullAccess
@@ -104,11 +120,19 @@ class EventGenerator extends ScheduledEventHandler {
 
 @CloudWatchFullAccess
 @AmazonKinesisFullAccess
+@AmazonDynamoDBFullAccess
 @KinesisConf(stream = "import:event-data-segment:event-intake-stream", startingPosition = "TRIM_HORIZON")
 class ReadModelEventHandler extends KinesisEventHandler {
   override def handle(events: List[KinesisEvent], ctx: SamContext): Unit = {
-    events.foreach { event =>
-      println(event.dataAs[Event])
-    }
+    val repo = DynamoDBJsonRepository("people_table", ctx, "id", "json")
+    val msg: String = Validation.fromTryCatchNonFatal {
+      events.map(_.dataAs[Event]).foreach {
+        case PersonCreated(id, name, timestamp) =>
+          repo.put(id, Person(id, name, timestamp))
+        case PersonRenamed(id, name, timestamp) =>
+          repo.update(id, Person(id, name, timestamp))
+      }
+    }.bifoldMap(_.getMessage)( _ => s"Done writing ${events.length} events")
+    println(msg)
   }
 }
